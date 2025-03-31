@@ -411,6 +411,17 @@ class DefaultCollationTestSuiteV1 extends DefaultCollationTestSuite {
       }
     }
   }
+
+  test("ALTER VIEW check default collation") {
+    withView(testView) {
+      sql(s"CREATE VIEW $testView DEFAULT COLLATION UTF8_LCASE AS SELECT 'a' AS c1, 'b' AS c2")
+      val prefix = "SYSTEM.BUILTIN"
+      checkAnswer(sql(s"SELECT DISTINCT COLLATION(c1) FROM $testView"), Row(s"$prefix.UTF8_LCASE"))
+      checkAnswer(sql(s"SELECT DISTINCT COLLATION(c2) FROM $testView"), Row(s"$prefix.UTF8_LCASE"))
+      sql(s"ALTER VIEW $testView AS SELECT 'c' AS c3 WHERE 'a' = 'A'")
+      checkAnswer(sql(s"SELECT DISTINCT COLLATION(c3) FROM $testView"), Row(s"$prefix.UTF8_LCASE"))
+    }
+  }
 }
 
 class DefaultCollationTestSuiteV2 extends DefaultCollationTestSuite with DatasourceV2SQLBase {
