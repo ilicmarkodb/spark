@@ -128,10 +128,21 @@ abstract class DefaultCollationTestSuite extends QueryTest with SharedSparkSessi
       sql(s"ALTER TABLE $testTable ALTER COLUMN c1 TYPE STRING COLLATE UNICODE_CI")
       assertTableColumnCollation(testTable, "c1", "UNICODE_CI")
 
+      // alter table alter column should inherit the table collation only if the column was not
+      // originally of a string type
+      sql(s"ALTER TABLE $testTable ALTER COLUMN c1 TYPE STRING")
+      assertTableColumnCollation(testTable, "c1", "UTF8_BINARY")
+
       // alter table add columns with explicit collation, check collation for each column
       sql(s"ALTER TABLE $testTable ADD COLUMN c7 STRING COLLATE SR_CI_AI")
       sql(s"ALTER TABLE $testTable ADD COLUMN c8 STRING COLLATE UTF8_BINARY")
-      assertTableColumnCollation(testTable, "c1", "UNICODE_CI")
+
+      // alter table alter column should inherit the table collation only if the column was not
+      // originally of a string type
+      sql(s"ALTER TABLE $testTable ALTER COLUMN c8 TYPE STRING")
+      assertTableColumnCollation(testTable, "c8", "UTF8_BINARY")
+
+      assertTableColumnCollation(testTable, "c1", "UTF8_BINARY")
       assertTableColumnCollation(testTable, "c2", "SR")
       assertTableColumnCollation(testTable, "c3", "UTF8_BINARY")
       assertTableColumnCollation(testTable, "c4", "UTF8_LCASE")
@@ -424,7 +435,7 @@ abstract class DefaultCollationTestSuite extends QueryTest with SharedSparkSessi
     sql(s"ALTER TABLE $testTable ALTER COLUMN c2 TYPE STRING")
     sql(s"ALTER TABLE $testTable ALTER COLUMN c3 TYPE STRING COLLATE UTF8_BINARY")
     assertTableColumnCollation(testTable, "c1", "UNICODE")
-    assertTableColumnCollation(testTable, "c2", tableDefaultCollation)
+    assertTableColumnCollation(testTable, "c2", "UTF8_BINARY")
     assertTableColumnCollation(testTable, "c3", "UTF8_BINARY")
   }
 }
