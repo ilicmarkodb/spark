@@ -188,3 +188,30 @@ case object NoConstraint extends StringConstraint
 case class FixedLength(length: Int) extends StringConstraint
 
 case class MaxLength(length: Int) extends StringConstraint
+
+/**
+ * Used exclusively in the context of UDFs when converting parameters/return types to string
+ * representations.
+ *
+ * For example, if a UDF parameter is defined as `p1 STRING COLLATE UTF8_BINARY`,
+ * calling [[typeName]] will return just `STRING`, omitting the collation information.
+ * This causes the parameter to be parsed into the companion object [[StringType]]. If the
+ * UDF has a default collation specified, it will be applied to the companion object [[StringType]],
+ * potentially resulting in the construction of a [[StringType]] with an invalid collation.
+ */
+object ExplicitUTF8BinaryStringType
+  extends StringType(CollationFactory.UTF8_BINARY_COLLATION_ID, NoConstraint) {
+  override def typeName: String = s"string collate $collationName"
+  override def toString: String = s"StringType($collationName)"
+
+  /**
+   * Transforms the given `dataType` by replacing each [[StringType]] that has an explicit
+   * `UTF8_BINARY` collation with `ExplicitUTF8BinaryStringType`.
+   */
+  def transform(dataType: DataType): DataType = {
+    dataType.transformRecursively {
+      case st: StringType if st.isUTF8BinaryCollation && !st.eq(StringType) =>
+        ExplicitUTF8BinaryStringType
+    }
+  }
+}
