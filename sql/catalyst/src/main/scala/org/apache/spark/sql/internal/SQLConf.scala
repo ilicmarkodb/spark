@@ -44,7 +44,7 @@ import org.apache.spark.sql.catalyst.analysis.{HintErrorLogger, Resolver}
 import org.apache.spark.sql.catalyst.expressions.CodegenObjectFactoryMode
 import org.apache.spark.sql.catalyst.expressions.codegen.CodeGenerator
 import org.apache.spark.sql.catalyst.plans.logical.HintErrorHandler
-import org.apache.spark.sql.catalyst.util.DateTimeUtils
+import org.apache.spark.sql.catalyst.util.{CollationFactory, DateTimeUtils}
 import org.apache.spark.sql.connector.catalog.CatalogManager.SESSION_CATALOG_NAME
 import org.apache.spark.sql.errors.{QueryCompilationErrors, QueryExecutionErrors}
 import org.apache.spark.sql.types.{AtomicType, TimestampNTZType, TimestampType}
@@ -1105,6 +1105,40 @@ object SQLConf {
       .version("4.1.0")
       .booleanConf
       .createWithDefault(false)
+
+  lazy val SESSION_LEVEL_COLLATIONS_ENABLED =
+    buildConf("spark.sql.collation.sessionLevel.enabled")
+      .internal()
+      .doc(
+        "Session level collations feature is under development and its use should be done " +
+          "under this feature flag. The feature allows setting default collation for the " +
+          "current session via SET COLLATION or spark.sql.session.collation.default. " +
+          "The session collation applies to string literals and builtin functions within " +
+          "queries in the session."
+      )
+      .version("4.2.0")
+      .booleanConf
+      .createWithDefault(false)
+
+  lazy val DEFAULT_COLLATION =
+    buildConf("spark.sql.session.collation.default")
+      .internal()
+      .doc("The default collation for the current session. Can also be set via SET COLLATION. " +
+        "Applies to string literals and builtin functions within queries in the session.")
+      .version("4.0.0")
+      .stringConf
+      .transform { collation =>
+        // Validates the collation name and returns its ID.
+        // Throws COLLATION_INVALID_NAME if the collation name is invalid.
+        val collationId = CollationFactory.collationNameToId(collation)
+        // Allow UTF8_BINARY regardless of feature flag, block non-UTF8_BINARY when disabled.
+        if (collationId != CollationFactory.UTF8_BINARY_COLLATION_ID &&
+            !SQLConf.get.sessionLevelCollationsEnabled) {
+          throw QueryCompilationErrors.sessionLevelCollationsNotEnabledError()
+        }
+        collation
+      }
+      .createWithDefault("UTF8_BINARY")
 
   val TRIM_COLLATION_ENABLED =
     buildConf("spark.sql.collation.trim.enabled")
@@ -7340,6 +7374,10 @@ class SQLConf extends Serializable with Logging with SqlApiConf {
   def objectLevelCollationsEnabled: Boolean = getConf(OBJECT_LEVEL_COLLATIONS_ENABLED)
 
   def schemaLevelCollationsEnabled: Boolean = getConf(SCHEMA_LEVEL_COLLATIONS_ENABLED)
+
+  def sessionLevelCollationsEnabled: Boolean = getConf(SESSION_LEVEL_COLLATIONS_ENABLED)
+
+  def sessionDefaultCollation: String = getConf(DEFAULT_COLLATION)
 
   def trimCollationEnabled: Boolean = getConf(TRIM_COLLATION_ENABLED)
 

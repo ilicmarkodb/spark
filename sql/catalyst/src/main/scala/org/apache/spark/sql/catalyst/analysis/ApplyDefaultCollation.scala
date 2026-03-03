@@ -25,8 +25,10 @@ import org.apache.spark.sql.catalyst.plans.logical.{AddColumns, AlterColumns, Al
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.catalyst.trees.CurrentOrigin
 import org.apache.spark.sql.catalyst.types.DataTypeUtils.{areSameBaseType, isDefaultStringCharOrVarcharType, replaceDefaultStringCharAndVarcharTypes}
-import org.apache.spark.sql.catalyst.util.CharVarcharUtils
+import org.apache.spark.sql.catalyst.util.{CharVarcharUtils, CollationFactory}
 import org.apache.spark.sql.connector.catalog.{SupportsNamespaces, TableCatalog}
+import org.apache.spark.sql.errors.QueryCompilationErrors
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{DataType, StringHelper, StringType}
 
 /**
@@ -41,7 +43,9 @@ object ApplyDefaultCollation extends Rule[LogicalPlan] {
     val preprocessedPlan = resolveDefaultCollation(pruneRedundantAlterColumnTypes(plan))
 
     fetchDefaultCollation(preprocessedPlan) match {
-      case Some(collation) =>
+      // No need to explicitly apply UTF8_BINARY collation.
+      case Some(collation) if CollationFactory.collationNameToId(collation) !=
+        CollationFactory.UTF8_BINARY_COLLATION_ID =>
         val transformedPlan = transform(preprocessedPlan, collation)
         if (preprocessedPlan fastEquals transformedPlan) {
           preprocessedPlan
@@ -80,7 +84,7 @@ object ApplyDefaultCollation extends Rule[LogicalPlan] {
           // expect resolved expressions can be applied.
           CollationTypeCasts(transformedPlan)
         }
-      case None => preprocessedPlan
+      case _ => preprocessedPlan
     }
   }
 
@@ -140,11 +144,21 @@ object ApplyDefaultCollation extends Rule[LogicalPlan] {
           case _ => None
         }
 
-      // Check if view has default collation
-      case _ if AnalysisContext.get.collation.isDefined =>
+      // Inside a view body: use the view's own collation if set, otherwise default to
+      // UTF8_BINARY. Does not fall back to session collation.
+      case _ if AnalysisContext.isInsideViewResolution =>
         AnalysisContext.get.collation
 
-      case _ => None
+      // For top-level queries, use session collation.
+      case _ =>
+        // TODO: Simplify this once the flag is enabled by default.
+        val collation = SQLConf.get.sessionDefaultCollation
+        val isUTF8BinaryCollation = CollationFactory.collationNameToId(collation) ==
+          CollationFactory.UTF8_BINARY_COLLATION_ID
+        if (!SQLConf.get.sessionLevelCollationsEnabled && !isUTF8BinaryCollation) {
+          throw QueryCompilationErrors.sessionLevelCollationsNotEnabledError()
+        }
+        Some(collation)
     }
   }
 
@@ -239,25 +253,15 @@ object ApplyDefaultCollation extends Rule[LogicalPlan] {
     Option(metadata.get(TableCatalog.PROP_COLLATION))
   }
 
-  private def isCreateOrAlterPlan(plan: LogicalPlan): Boolean = plan match {
-    // For CREATE TABLE, only v2 CREATE TABLE command is supported.
-    case _: V2CreateTablePlan | _: ReplaceTable | _: CreateView | _: AlterViewAs |
-         _: CreateTempView => true
-    case _ => false
-  }
-
   private def transform(plan: LogicalPlan, collation: String): LogicalPlan = {
     plan resolveOperators {
-      case p if isCreateOrAlterPlan(p) || AnalysisContext.get.collation.isDefined =>
-        transformPlan(p, collation)
-
       case addCols: AddColumns =>
         addCols.copy(columnsToAdd = replaceColumnTypes(addCols.columnsToAdd, collation))
 
       case replaceCols: ReplaceColumns =>
         replaceCols.copy(columnsToAdd = replaceColumnTypes(replaceCols.columnsToAdd, collation))
 
-      case a @ AlterColumns(ResolvedTable(_, _, _, _), specs: Seq[AlterColumnSpec]) =>
+      case a @ AlterColumns(_, specs: Seq[AlterColumnSpec]) =>
         val newSpecs = specs.map {
           case spec if shouldApplyDefaultCollationToAlterColumn(spec) =>
             spec.copy(newDataType =
@@ -265,6 +269,9 @@ object ApplyDefaultCollation extends Rule[LogicalPlan] {
           case col => col
         }
         a.copy(specs = newSpecs)
+
+      case p =>
+        transformPlan(p, collation)
     }
   }
 
@@ -412,4 +419,5 @@ object ApplyDefaultCollation extends Rule[LogicalPlan] {
       case col => col
     }
   }
+
 }

@@ -442,7 +442,8 @@ streamRelationPrimary
     ;
 
 setResetStatement
-    : SET ROLE .*?                                                     #failSetRole
+    : SET COLLATION collationName=identifier                           #setCollation
+    | SET ROLE .*?                                                     #failSetRole
     | SET TIME ZONE interval                                           #setTimeZone
     | SET TIME ZONE timezone                                           #setTimeZone
     | SET TIME ZONE .*?                                                #setTimeZone
