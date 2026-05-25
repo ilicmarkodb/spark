@@ -25,31 +25,29 @@ import org.apache.spark.sql.types.StringType
 
 class AlterViewAsSuite extends command.AlterViewAsSuiteBase with ViewCommandSuiteBase {
 
-  test("V2: ALTER VIEW AS picks up the namespace's default collation when the existing view " +
-      "has none") {
-    // Create the namespace with no default collation; create a view in it (PROP_COLLATION
-    // unset). Then set the namespace default and ALTER VIEW AS -- the new ViewInfo must end
-    // up with PROP_COLLATION = UTF8_LCASE (so v1Table.toCatalogTable's `collation` field is
-    // set, and view-read time picks up UTF8_LCASE via AnalysisContext.collation).
+  test("V2: CREATE VIEW pins the namespace's default collation, and ALTER NAMESPACE is inert") {
+    // CREATE VIEW resolves and pins the default collation at create time. When the namespace
+    // has no default, the view falls back to `UTF8_BINARY`. A later `ALTER NAMESPACE ...
+    // DEFAULT COLLATION` therefore cannot retroactively change the view's body collation --
+    // `ALTER VIEW AS` inherits the pinned value and `PROP_COLLATION` stays put.
     withSQLConf(SQLConf.SCHEMA_LEVEL_COLLATIONS_ENABLED.key -> "true") {
       val viewName = "v2_alter_collation_inherit"
       val view = s"$catalog.$namespace.$viewName"
       sql(s"CREATE VIEW $view AS SELECT 'a' AS c1")
-      assert(Option(viewCatalog
+      assert(viewCatalog
         .getStoredView(Array(namespace), viewName)
         .properties()
-        .get(TableCatalog.PROP_COLLATION))
-        .isEmpty)
+        .get(TableCatalog.PROP_COLLATION) == "UTF8_BINARY")
 
       sql(s"ALTER NAMESPACE $catalog.$namespace DEFAULT COLLATION UTF8_LCASE")
       sql(s"ALTER VIEW $view AS SELECT 'x' AS c1, 'y' AS c2")
 
       val stored = viewCatalog.getStoredView(Array(namespace), viewName)
-      assert(stored.properties().get(TableCatalog.PROP_COLLATION) == "UTF8_LCASE")
-      // Read-time the view body's literal types reflect the inherited collation.
+      assert(stored.properties().get(TableCatalog.PROP_COLLATION) == "UTF8_BINARY")
+      // Read-time the view body's literal types reflect the pinned create-time collation.
       val df = spark.table(view)
-      assert(df.schema("c1").dataType === StringType("UTF8_LCASE"))
-      assert(df.schema("c2").dataType === StringType("UTF8_LCASE"))
+      assert(df.schema("c1").dataType === StringType("UTF8_BINARY"))
+      assert(df.schema("c2").dataType === StringType("UTF8_BINARY"))
     }
   }
 

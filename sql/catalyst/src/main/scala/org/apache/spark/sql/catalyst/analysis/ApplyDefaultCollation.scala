@@ -199,9 +199,14 @@ object ApplyDefaultCollation extends Rule[LogicalPlan] {
         case createView@CreateView(ResolvedIdentifier(
         catalog: SupportsNamespaces, identifier), _, _, _, _, _, _, _, _, _, _, _)
           if createView.collation.isEmpty =>
+          // Pin a concrete default at create time. If the schema doesn't supply one, fall
+          // back to `UTF8_BINARY` so a later `ALTER SCHEMA ... DEFAULT COLLATION` cannot
+          // retroactively change how the view's body is re-analyzed. This matches the UC
+          // behavior, which always stamps a non-null collation on the persisted view.
+          val resolvedCollation = getCollationFromSchemaMetadata(catalog, identifier.namespace())
+            .orElse(Some(StringType.collationName))
           val newCreateView = CurrentOrigin.withOrigin(createView.origin) {
-            createView.copy(
-              collation = getCollationFromSchemaMetadata(catalog, identifier.namespace()))
+            createView.copy(collation = resolvedCollation)
           }
           newCreateView.copyTagsFrom(createView)
           newCreateView
